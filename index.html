@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Spectrum Audio Player</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #0f172a;
+  overflow: hidden;
+}
+#playerContainer {
+  display: flex;
+  width: 90%;
+  max-width: 1300px;
+  height: 80vh;
+  margin: 0 auto;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1.5rem;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  color: white;
+  overflow: hidden;
+}
+#controlPanel {
+  flex: 0 0 42%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2rem;
+}
+#progressBar {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 9999px;
+  background: #334155;
+}
+#progressBar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ec4899;
+  cursor: pointer;
+}
+#spectrumCanvas {
+  flex: 0 0 58%;
+  height: 100%;
+  background: radial-gradient(ellipse at center, #0f172a 0%, #020617 100%);
+  border-left: 1px solid rgba(255,255,255,0.1);
+}
+</style>
+</head>
+<body class="flex justify-center items-center min-h-screen">
+
+<div id="playerContainer">
+  <div id="controlPanel">
+    
+    <div id="selectionView">
+      <input type="file" id="fileInput" accept="audio/*"
+        class="w-full text-sm text-gray-400 file:mr-4 file:py-3 file:px-4
+               file:rounded-full file:border-0 file:text-sm file:font-semibold
+               file:bg-pink-500 file:text-white hover:file:bg-pink-600 cursor-pointer transition duration-150">
+      <p class="text-sm text-gray-400 mt-4 text-center">音楽ファイルを選択して再生します。</p>
+    </div>
+
+    <div id="playerView" class="hidden">
+      <div class="mb-4">
+        <p class="text-xs text-gray-400">再生中:</p>
+        <p id="songTitle" class="text-lg font-semibold text-pink-300 truncate"></p>
+      </div>
+
+      <div class="flex items-center space-x-3 mb-6">
+        <span id="currentTime" class="text-sm font-mono text-gray-300 w-10 text-right">0:00</span>
+        <input type="range" id="progressBar" value="0" min="0" max="100" disabled>
+        <span id="duration" class="text-sm font-mono text-gray-300 w-10 text-left">0:00</span>
+      </div>
+
+      <div class="flex justify-center">
+        <button id="playPauseBtn" disabled
+          class="p-5 rounded-full bg-pink-500 hover:bg-pink-600 shadow-xl transition transform hover:scale-110">
+          <svg id="playIcon" xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="white" viewBox="0 0 24 24">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          <svg id="pauseIcon" xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="white" viewBox="0 0 24 24" class="hidden">
+            <rect x="6" y="4" width="4" height="16"></rect>
+            <rect x="14" y="4" width="4" height="16"></rect>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="spectrumCanvas"></canvas>
+
+  <audio id="audioElement" preload="metadata"></audio>
+</div>
+
+<script>
+const fileInput=document.getElementById('fileInput');
+const audioElement=document.getElementById('audioElement');
+const playPauseBtn=document.getElementById('playPauseBtn');
+const playIcon=document.getElementById('playIcon');
+const pauseIcon=document.getElementById('pauseIcon');
+const progressBar=document.getElementById('progressBar');
+const currentTimeDisplay=document.getElementById('currentTime');
+const durationDisplay=document.getElementById('duration');
+const songTitle=document.getElementById('songTitle');
+const selectionView=document.getElementById('selectionView');
+const playerView=document.getElementById('playerView');
+const canvas=document.getElementById('spectrumCanvas');
+const ctx=canvas.getContext('2d');
+
+let audioCtx,analyser,source,dataArray,bufferLength,animationId;
+let filters=[];
+let mutedBands={};
+
+function resizeCanvas(){
+  canvas.width=canvas.clientWidth;
+  canvas.height=canvas.clientHeight;
+}
+window.addEventListener('resize',resizeCanvas);
+resizeCanvas();
+
+const bands=[
+  {label:"80Hz",freq:80},
+  {label:"200Hz",freq:200},
+  {label:"500Hz",freq:500},
+  {label:"1kHz",freq:1000},
+  {label:"4kHz",freq:4000},
+  {label:"8kHz",freq:8000},
+  {label:"16kHz",freq:16000},
+];
+
+function drawSpectrum(){
+  animationId=requestAnimationFrame(drawSpectrum);
+  analyser.getByteFrequencyData(dataArray);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  const total=bands.length;
+  const barWidth=canvas.width/(total*3.5);
+  const barGap=barWidth*0.6;
+  const totalWidth=total*(barWidth+barGap);
+  const offsetX=(canvas.width-totalWidth)*0.05; // ← 最も左寄せ（パネルに近づけ）
+  const baseY=canvas.height*0.9;
+  ctx.font="13px Inter";
+  ctx.textAlign="center";
+
+  bands.forEach((band,i)=>{
+    const index=Math.floor((band.freq/(audioCtx.sampleRate/2))*bufferLength);
+    const value=dataArray[index];
+    const barHeight=(value/255)*(canvas.height*0.7);
+    const x=offsetX+i*(barWidth+barGap);
+    const y=baseY-barHeight;
+
+    if(mutedBands[band.label]) {
+      ctx.fillStyle="#6b7280";
+    } else {
+      const gradient=ctx.createLinearGradient(x,y,x,baseY);
+      gradient.addColorStop(0,"#8b5cf6");
+      gradient.addColorStop(1,"#ec4899");
+      ctx.fillStyle=gradient;
+    }
+
+    ctx.fillRect(x,y,barWidth,barHeight);
+    ctx.fillStyle="#9ca3af";
+    ctx.fillText(band.label,x+barWidth/2,baseY+20);
+  });
+}
+
+function setupAudioContext(){
+  if(!audioCtx){
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    analyser=audioCtx.createAnalyser();
+    analyser.fftSize=2048;
+    bufferLength=analyser.frequencyBinCount;
+    dataArray=new Uint8Array(bufferLength);
+    let prev;
+    bands.forEach(b=>{
+      const f=audioCtx.createBiquadFilter();
+      f.type="peaking"; f.frequency.value=b.freq; f.Q.value=1.4; f.gain.value=0;
+      filters.push(f);
+      if(prev) prev.connect(f);
+      prev=f;
+    });
+    source=audioCtx.createMediaElementSource(audioElement);
+    source.connect(filters[0]);
+    filters[filters.length-1].connect(analyser);
+    analyser.connect(audioCtx.destination);
+  }
+}
+
+canvas.addEventListener('click',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const x=e.clientX-rect.left;
+  const total=bands.length;
+  const barWidth=canvas.width/(total*3.5);
+  const barGap=barWidth*0.6;
+  const totalWidth=total*(barWidth+barGap);
+  const offsetX=(canvas.width-totalWidth)*0.05;
+
+  bands.forEach((band,i)=>{
+    const barX=offsetX+i*(barWidth+barGap);
+    if(x>barX && x<barX+barWidth){
+      const filter=filters[i];
+      if(mutedBands[band.label]){
+        filter.gain.value=0;
+        mutedBands[band.label]=false;
+      } else {
+        filter.gain.value=-40;
+        mutedBands[band.label]=true;
+      }
+    }
+  });
+});
+
+function formatTime(sec){
+  if(isNaN(sec))return'0:00';
+  const m=Math.floor(sec/60);
+  const s=Math.floor(sec%60);
+  return`${m}:${s.toString().padStart(2,'0')}`;
+}
+
+fileInput.addEventListener('change',()=>{
+  const file=fileInput.files[0];
+  if(file){
+    const url=URL.createObjectURL(file);
+    audioElement.src=url;
+    songTitle.textContent=file.name;
+    selectionView.classList.add('hidden');
+    playerView.classList.remove('hidden');
+    setupAudioContext();
+  }
+});
+
+audioElement.addEventListener('loadedmetadata',()=>{
+  playPauseBtn.disabled=false;
+  progressBar.disabled=false;
+  progressBar.max=audioElement.duration;
+  durationDisplay.textContent=formatTime(audioElement.duration);
+});
+
+playPauseBtn.addEventListener('click',async()=>{
+  if(audioElement.paused){
+    await audioCtx.resume();
+    audioElement.play();
+    playIcon.classList.add('hidden');
+    pauseIcon.classList.remove('hidden');
+    drawSpectrum();
+  }else{
+    audioElement.pause();
+    playIcon.classList.remove('hidden');
+    pauseIcon.classList.add('hidden');
+    cancelAnimationFrame(animationId);
+  }
+});
+
+audioElement.addEventListener('timeupdate',()=>{
+  progressBar.value=audioElement.currentTime;
+  currentTimeDisplay.textContent=formatTime(audioElement.currentTime);
+});
+
+progressBar.addEventListener('input',()=>{
+  audioElement.currentTime=progressBar.value;
+});
+
+audioElement.addEventListener('ended',()=>{
+  playIcon.classList.remove('hidden');
+  pauseIcon.classList.add('hidden');
+  cancelAnimationFrame(animationId);
+});
+</script>
+</body>
+</html>
